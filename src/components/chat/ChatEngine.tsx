@@ -107,8 +107,45 @@ export const ChatEngine: React.FC = () => {
   const [isListening, setIsListening] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // ── Legacy speech-to-text (transcription → text input) ───────────────────
+  // ── Scroll-to-bottom control (Issue #106) ────────────────────────────────
+  // Threshold (px from bottom) within which the view is considered "at bottom".
+  const SCROLL_THRESHOLD = 120;
+
+  /**
+   * Returns true when the scroll container is within SCROLL_THRESHOLD pixels
+   * of the bottom.  Safe to call with a null ref (returns true so the default
+   * behaviour is to scroll).
+   */
+  const isNearBottom = (): boolean => {
+    const el = scrollContainerRef.current;
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_THRESHOLD;
+  };
+
+  // Track whether the user has scrolled away from the bottom and how many
+  // messages have arrived since they did.
+  const [isScrolledUp, setIsScrolledUp] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  // Listen to scroll events on the message container to flip isScrolledUp.
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+
+    const handleScroll = () => {
+      const atBottom = isNearBottom();
+      setIsScrolledUp(!atBottom);
+      if (atBottom) setUnreadCount(0);
+    };
+
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    return () => el.removeEventListener('scroll', handleScroll);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Legacy speech-to-text (transcription → text input) ───────────────────
   // Kept for the Mic button when MediaRecorder is NOT supported
   const [isLegacyRecording, setIsLegacyRecording] = useState(false);
   const [legacyRecordingTime, setLegacyRecordingTime] = useState(0);
@@ -152,7 +189,16 @@ export const ChatEngine: React.FC = () => {
 
   // ── Effects ───────────────────────────────────────────────────────────────
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth" });
+    // Issue #106: only auto-scroll when already at the bottom; otherwise just
+    // increment the unread counter so the floating button can show the count.
+    if (isNearBottom()) {
+      messagesEndRef.current?.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth" });
+      setUnreadCount(0);
+    } else {
+      setIsScrolledUp(true);
+      setUnreadCount((prev) => prev + 1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, isTyping, voiceStatus, prefersReducedMotion]);
 
   useEffect(() => {
