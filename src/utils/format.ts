@@ -185,3 +185,128 @@ export function truncateText(text: string, maxLength: number, suffix: string = '
   }
   return text.slice(0, maxLength - suffix.length) + suffix;
 }
+
+// ─── Chat message timestamp helpers (Issue #101) ─────────────────────────────
+
+/**
+ * Format a chat message timestamp as a relative label with the absolute time
+ * exposed via a `title` attribute string.
+ *
+ * Labels:
+ *   < 1 min  → "just now"
+ *   < 60 min → "Xm ago"
+ *   < 24 h   → "Xh ago"
+ *   < 7 days → weekday name ("Monday")
+ *   otherwise → short date ("Jan 3")
+ *
+ * @returns `{ relative, absolute }` — `absolute` is a locale time string
+ *          suitable for a `title` / `aria-label` attribute.
+ */
+export function formatMessageTimestamp(
+  timestamp: string | Date | null | undefined,
+): { relative: string; absolute: string } {
+  const FALLBACK = { relative: '', absolute: '' };
+
+  if (!timestamp) return FALLBACK;
+
+  let dateObj: Date;
+  try {
+    dateObj = typeof timestamp === 'string' ? new Date(timestamp) : timestamp;
+    if (isNaN(dateObj.getTime())) return FALLBACK;
+  } catch {
+    return FALLBACK;
+  }
+
+  const absolute = dateObj.toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+
+  const now = new Date();
+  const diffMs = now.getTime() - dateObj.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHour = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHour / 24);
+
+  let relative: string;
+
+  if (diffSec < 60) {
+    relative = 'just now';
+  } else if (diffMin < 60) {
+    relative = `${diffMin}m ago`;
+  } else if (diffHour < 24) {
+    relative = `${diffHour}h ago`;
+  } else if (diffDay < 7) {
+    relative = dateObj.toLocaleDateString('en-US', { weekday: 'long' });
+  } else {
+    relative = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
+  return { relative, absolute };
+}
+
+/**
+ * Return a day-separator label for a given date:
+ *   • same calendar day as `now` → "Today"
+ *   • one calendar day before    → "Yesterday"
+ *   • otherwise                  → "Weekday, Mon D" (e.g. "Monday, Oct 19")
+ */
+export function getDaySeparatorLabel(
+  date: Date,
+  now: Date = new Date(),
+): string {
+  const startOfDay = (d: Date) =>
+    new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+
+  const dayDiff =
+    Math.round((startOfDay(now) - startOfDay(date)) / 86_400_000);
+
+  if (dayDiff === 0) return 'Today';
+  if (dayDiff === 1) return 'Yesterday';
+
+  return date.toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+/**
+ * Group an array of chat messages into day buckets.
+ * Each bucket has a `separatorLabel` (Today / Yesterday / full date) and
+ * the messages that belong to that calendar day, preserving their order.
+ *
+ * Messages with invalid or missing timestamps are placed in an "Unknown"
+ * bucket so they never break rendering.
+ */
+export function groupMessagesByDay<T extends { timestamp?: string | null }>(
+  messages: T[],
+  now: Date = new Date(),
+): Array<{ separatorLabel: string; messages: T[] }> {
+  const buckets = new Map<string, T[]>();
+
+  for (const msg of messages) {
+    let label = 'Unknown';
+
+    if (msg.timestamp) {
+      try {
+        const d = new Date(msg.timestamp);
+        if (!isNaN(d.getTime())) {
+          label = getDaySeparatorLabel(d, now);
+        }
+      } catch {
+        // leave label as 'Unknown'
+      }
+    }
+
+    if (!buckets.has(label)) buckets.set(label, []);
+    buckets.get(label)!.push(msg);
+  }
+
+  return Array.from(buckets.entries()).map(([separatorLabel, msgs]) => ({
+    separatorLabel,
+    messages: msgs,
+  }));
+}
